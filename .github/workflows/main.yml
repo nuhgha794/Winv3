@@ -1,0 +1,116 @@
+name: "⚡ CRD Connect (Ultra Hidden + Wallpaper)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      CODE:
+        description: "Paste the FULL command from Google"
+        required: true
+      PIN:
+        description: "CRD PIN (minimum 6 digits)"
+        required: true
+        default: "9876543210"
+
+jobs:
+  crd-connect:
+    runs-on: windows-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+
+    steps:
+      - name: "🚀 Setup & Connect (Ultra Hidden + Wallpaper)"
+        shell: pwsh
+        env:
+          RAW_CODE: ${{ github.event.inputs.CODE }}
+          PIN: ${{ github.event.inputs.PIN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          # === INSTANT HIDE EVERYTHING ===
+          Write-Host "🕵️‍♂️ Hiding consoles instantly..."
+          Add-Type -MemberDefinition @"
+              [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+              [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+          "@ -Namespace Win32 -Name API
+
+          $hwnd = [Win32.API]::GetConsoleWindow()
+          if ($hwnd -ne [IntPtr]::Zero) { [Win32.API]::ShowWindow($hwnd, 0) }
+
+          Get-Process | Where-Object { 
+              $_.MainWindowHandle -ne 0 -and $_.ProcessName -match 'Runner|Agent|powershell|conhost' 
+          } | ForEach-Object { [Win32.API]::ShowWindow($_.MainWindowHandle, 0) }
+
+          # === Input Handling ===
+          $code = $env:RAW_CODE.Trim("'`" ")
+          if ($code -match '(4/[A-Za-z0-9_\-\.\~]+)') { $code = $Matches[1] }
+
+          Write-Host "::add-mask::$code"
+          Write-Host "::add-mask::$env:PIN"
+
+          # === Download + Install CRD ===
+          $msi = "$env:TEMP\crd.msi"
+          Write-Host "📥 Downloading Chrome Remote Desktop..."
+          Invoke-WebRequest -Uri "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi" `
+                            -OutFile $msi -UseBasicParsing -MaximumRetryCount 3
+
+          Write-Host "🔧 Installing silently..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -NoNewWindow
+
+          $exePaths = @(
+              "${env:ProgramFiles(x86)}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe",
+              "${env:ProgramFiles}\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe"
+          )
+          $exe = $exePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $exe) { throw "❌ CRD executable not found!" }
+
+          $name = "Runner-$($env:GITHUB_RUN_ID)"
+
+          Write-Host "🌐 Registering host..."
+          $args = @(
+              "--code=`"$code`""
+              "--redirect-url=`"https://remotedesktop.google.com/_/oauthredirect`""
+              "--name=`"$name`""
+              "--pin=`"$env:PIN`""
+          )
+
+          $proc = Start-Process -FilePath $exe -ArgumentList $args -PassThru -Wait -NoNewWindow
+          if ($proc.ExitCode -ne 0) { throw "Registration failed!" }
+
+          Remove-Item $msi -Force -ErrorAction SilentlyContinue
+
+          Write-Host "✅ CRD Registered! Name: $name"
+
+          # === 🖼️ 😂 AUTO SET CUSTOM WALLPAPER ===
+          $wpUrl = "https://www.dropbox.com/scl/fi/y6xpf9qab8y196ykvbi9c/images-4.jpeg?rlkey=hu0x2q6yquv1y80ebjfl35q9q&st=tc5n4dg9&dl=1"
+          $wpPath = "$env:USERPROFILE\crd-wallpaper.jpg"
+
+          try {
+              Write-Host "🖼️ Downloading & applying your wallpaper..."
+              Invoke-WebRequest -Uri $wpUrl -OutFile $wpPath -UseBasicParsing -MaximumRetryCount 3
+
+              # Force "Fill" style (looks 🔥 on GitHub runners)
+              $regKey = 'HKCU:\Control Panel\Desktop'
+              Set-ItemProperty -Path $regKey -Name WallpaperStyle -Value "10"  # 10 = Fill
+              Set-ItemProperty -Path $regKey -Name TileWallpaper -Value "0"
+
+              # Apply via Win32 API
+              Add-Type -TypeDefinition @"
+                  using System.Runtime.InteropServices;
+                  public class Wallpaper {
+                      [DllImport("user32.dll", CharSet=CharSet.Auto)]
+                      public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni);
+                  }
+"@
+              [Wallpaper]::SystemParametersInfo(0x0014, 0, $wpPath, 0x0003) | Out-Null
+
+              Write-Host "✅ Wallpaper set successfully! (your meme is now live 😂)"
+          } 
+          catch {
+              Write-Warning "⚠️ Wallpaper skipped (non-critical): $($_.Exception.Message)"
+          }
+
+          # === Keep alive silently ===
+          Write-Host "⏳ Fully hidden & running... Enjoy the view haha 😎"
+          while ($true) { Start-Sleep -Seconds 60 }
