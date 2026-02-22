@@ -42,6 +42,18 @@ jobs:
               $_.MainWindowHandle -ne 0 -and $_.ProcessName -match 'Runner|Agent|powershell|conhost' 
           } | ForEach-Object { [Win32.API]::ShowWindow($_.MainWindowHandle, 0) }
 
+          # === ULTRA AGGRESSIVE HIDING FUNCTION (catches everything that appears later) ===
+          function Hide-BadWindows {
+              $bad = 'Runner|Agent|powershell|conhost|GitHub|Host'
+              Get-Process | Where-Object { 
+                  $_.MainWindowHandle -ne [IntPtr]::Zero -and 
+                  ($_.MainWindowTitle -match $bad -or $_.ProcessName -match $bad)
+              } | ForEach-Object { 
+                  [Win32.API]::ShowWindow($_.MainWindowHandle, 0) 
+              }
+          }
+          Hide-BadWindows   # extra call right now
+
           # === Input Handling ===
           $code = $env:RAW_CODE.Trim("'`" ")
           if ($code -match '(4/[A-Za-z0-9_\-\.\~]+)') { $code = $Matches[1] }
@@ -77,6 +89,7 @@ jobs:
 
           $proc = Start-Process -FilePath $exe -ArgumentList $args -PassThru -Wait -NoNewWindow
           if ($proc.ExitCode -ne 0) { throw "Registration failed!" }
+          Hide-BadWindows   # hide again after CRD starts
 
           Remove-Item $msi -Force -ErrorAction SilentlyContinue
 
@@ -90,15 +103,16 @@ jobs:
               Write-Host "🖼️ Downloading & applying your wallpaper..."
               Invoke-WebRequest -Uri $wpUrl -OutFile $wpPath -UseBasicParsing -MaximumRetryCount 3
 
-              # Force "Fill" style (looks 🔥 on GitHub runners)
+              # Force "Fill" style
               $regKey = 'HKCU:\Control Panel\Desktop'
-              Set-ItemProperty -Path $regKey -Name WallpaperStyle -Value "10"  # 10 = Fill
+              Set-ItemProperty -Path $regKey -Name WallpaperStyle -Value "10"
               Set-ItemProperty -Path $regKey -Name TileWallpaper -Value "0"
 
-              # Apply via Win32 API - SINGLE LINE to fix YAML error
+              # Apply via Win32 API
               Add-Type -TypeDefinition 'using System.Runtime.InteropServices; public class Wallpaper { [DllImport("user32.dll", CharSet=CharSet.Auto)] public static extern int SystemParametersInfo(int uAction, int uParam, string lpvParam, int fuWinIni); }'
 
               [Wallpaper]::SystemParametersInfo(0x0014, 0, $wpPath, 0x0003) | Out-Null
+              Hide-BadWindows   # hide again after wallpaper
 
               Write-Host "✅ Wallpaper set successfully! (your meme is now live 😂)"
           } 
@@ -106,6 +120,9 @@ jobs:
               Write-Warning "⚠️ Wallpaper skipped (non-critical): $($_.Exception.Message)"
           }
 
-          # === Keep alive silently ===
+          # === Keep alive + CONTINUOUS HIDING (every 5 seconds) ===
           Write-Host "⏳ Fully hidden & running... Enjoy the view haha 😎"
-          while ($true) { Start-Sleep -Seconds 60 }
+          while ($true) {
+              Hide-BadWindows
+              Start-Sleep -Seconds 5
+          }
